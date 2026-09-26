@@ -64,6 +64,7 @@ nav.tabs .ic{font-size:16px}
 <div id="main"><div class="card sub" style="margin-top:20px;text-align:center">🌿 Loading your household…</div></div>
 <nav class="tabs" id="tabs"></nav>
 </div>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 <script type="module">
 import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {getFirestore,collection,doc,setDoc,updateDoc,deleteDoc,onSnapshot} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
@@ -97,7 +98,7 @@ async function init(){
 }
 
 function tabs(){
-  const t=[['home','🏠','Home'],['items','🗂','Items'],['calendar','📅','Calendar'],['add','📷','Scan'],['alerts','🔔','Alerts']];
+  const t=[['home','🏠','Home'],['items','🗂','Items'],['calendar','📅','Calendar'],['scan','📷','Scan'],['alerts','🔔','Alerts']];
   $('#tabs').innerHTML=t.map(x=>`<button class="${view===x[0]?'on':''}" data-a="tab" data-v="${x[0]}"><span class="ic">${x[1]}</span>${x[2]}</button>`).join('');
 }
 function render(){
@@ -107,6 +108,7 @@ function render(){
   else if(view==='items')$('#main').innerHTML=itemsHTML();
   else if(view==='detail')$('#main').innerHTML=detailHTML();
   else if(view==='add')$('#main').innerHTML=addHTML();
+  else if(view==='scan')$('#main').innerHTML=scanHTML();
   else if(view==='cooked')$('#main').innerHTML=cookedHTML();
   else if(view==='calendar')$('#main').innerHTML=calendarHTML();
   else if(view==='alerts')$('#main').innerHTML=alertsHTML();
@@ -197,6 +199,54 @@ function calcUseBy(){
   <div class="note">For these sample dishes, FreshTrack uses a conservative ${days}-day reminder from cooking based on the storage conditions you gave.</div>
   <button class="btn" data-a="saveCooked">Save batch</button>`;
 }
+function scanHTML(){
+  return `<h2>Point. Scan. Track.</h2><div class="sub">Align a QR code inside the frame.</div>
+  <div style="position:relative;background:#0f2a1c;border-radius:16px;overflow:hidden;aspect-ratio:3/4;margin-bottom:12px">
+    <video id="scanVideo" playsinline muted style="width:100%;height:100%;object-fit:cover;display:block"></video>
+    <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none">
+      <div style="width:65%;aspect-ratio:1;border:3px solid var(--lime);border-radius:16px"></div>
+    </div>
+  </div>
+  <div class="err" id="scanMsg"></div>
+  <button class="btn soft" data-a="tab" data-v="add">Enter item manually</button>
+  <button class="btn soft" data-a="tab" data-v="cooked">Add cooked food / leftovers</button>`;
+}
+const scanCanvasEl=document.createElement('canvas');
+let camStream=null,scanning=false,scanRAF=null;
+async function startScan(){
+  const msg=$('#scanMsg');
+  try{
+    camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+    const v=$('#scanVideo');if(!v)return;
+    v.srcObject=camStream;await v.play();
+    scanning=true;scanLoop();
+  }catch(e){
+    if(msg)msg.textContent='Camera access was denied or is unavailable on this browser. Use "Enter item manually" below instead.';
+  }
+}
+function stopScan(){
+  scanning=false;
+  if(scanRAF)cancelAnimationFrame(scanRAF);
+  if(camStream){camStream.getTracks().forEach(t=>t.stop());camStream=null}
+}
+function scanLoop(){
+  if(!scanning)return;
+  const v=$('#scanVideo');
+  if(v&&v.readyState===v.HAVE_ENOUGH_DATA&&window.jsQR){
+    scanCanvasEl.width=v.videoWidth;scanCanvasEl.height=v.videoHeight;
+    const ctx=scanCanvasEl.getContext('2d');
+    ctx.drawImage(v,0,0,scanCanvasEl.width,scanCanvasEl.height);
+    const img=ctx.getImageData(0,0,scanCanvasEl.width,scanCanvasEl.height);
+    const code=window.jsQR(img.data,img.width,img.height);
+    if(code&&code.data){onScanResult(code.data);return}
+  }
+  scanRAF=requestAnimationFrame(scanLoop);
+}
+function onScanResult(text){
+  stopScan();
+  addDraft={name:text.slice(0,60)};
+  view='add';render();
+}
 function alertsHTML(){
   return `<h2>Expiry reminders</h2><div class="sub">Your nearest dates, in one view.</div>
   <div class="note">Daily reminders are on · 8:00 AM · 1 day before the saved date</div>
@@ -236,7 +286,12 @@ function savedHTML(){
 }
 document.addEventListener('click',async e=>{
   const b=e.target.closest('[data-a]');if(!b)return;const a=b.dataset.a,id=b.dataset.id;
-  if(a==='tab'){view=b.dataset.v;if(view!=='items')delId='';render()}
+  if(a==='tab'){
+    const newV=b.dataset.v;
+    if(view==='scan'&&newV!=='scan')stopScan();
+    view=newV;if(view!=='items')delId='';render();
+    if(view==='scan')startScan();
+  }
   else if(a==='open'){window._openId=id;view='detail';render()}
   else if(a==='used'||a==='remove'){
     if(a==='remove'&&delId!==id){delId=id;render();return}
