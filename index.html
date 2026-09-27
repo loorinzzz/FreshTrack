@@ -86,7 +86,7 @@ const DAY=86400000;
 const fmt=t=>t?new Date(t).toLocaleDateString('en-US',{day:'numeric',month:'long',year:'numeric'}):'';
 const fmtdt=t=>t?new Date(t).toLocaleString('en-US',{day:'numeric',month:'short',hour:'numeric',minute:'2-digit'}):'';
 let db,items=[],outages=[],ready=0,view='home',selDate=null,calY,calM,delId='',flagIds=new Set();
-let addStep='pick',addDraft={},cookDraft={},outDraft={};
+let addStep='pick',addDraft={},cookDraft={},outDraft={},cookStep='dish';
 function todayLocal(){const d=new Date();d.setHours(0,0,0,0);return d.getTime()}
 async function init(){
   try{const app=initializeApp(FIREBASE_CONFIG),fs=getFirestore(app);
@@ -172,39 +172,103 @@ function addHTML(){
   <button class="btn" data-a="saveItem">Save to my household</button>
   <button class="btn soft" data-a="tab" data-v="cooked">Add cooked food / leftovers instead</button>`;
 }
+const PRESET_ING=['Chicken','Pork / beef','Fish / seafood','Eggs','Milk / cream','Vegetables','Rice'];
+const COND_OPTS=['Fresh ingredients; dish fully cooked','Contains previously cooked leftovers','Not sure / an ingredient was spoiled'];
 function cookedHTML(){
+  if(cookStep==='ingredients')return cookedIngredientsHTML();
+  if(cookStep==='condition')return cookedConditionHTML();
+  if(cookStep==='sample')return cookedSampleHTML();
+  if(cookStep==='form')return cookedFormHTML();
+  if(cookStep==='estimate')return cookedEstimateHTML();
+  return cookedDishHTML();
+}
+function cookedDishHTML(){
+  const d=cookDraft;
   return `<button class="pill" data-a="tab" data-v="add">← Back</button>
-  <h2 style="margin-top:12px">Cooked food</h2><div class="sub">Set a use-by reminder for a batch of leftovers.</div>
-  <label>Dish</label><select id="c_dish">${DISHES.map(x=>`<option>${x}</option>`).join('')}</select>
+  <h2 style="margin-top:12px">Make it your dish</h2><div class="sub">Name your meal and record what went into it.</div>
+  <label>Dish name</label><input id="cd_name" placeholder="e.g. Egg casserole" value="${esc(d.dishName||'')}">
+  <label>Ingredients</label><div class="card" data-a="cookGo" data-v="ingredients" style="cursor:pointer">${d.ingredients&&d.ingredients.length?esc(d.ingredients.join(' · ')):'Tap to add ingredients'}</div>
+  <label>Ingredient condition</label><div class="card" data-a="cookGo" data-v="condition" style="cursor:pointer">${d.ingredientCond?esc(d.ingredientCond):'Tap to choose'}</div>
+  <div class="sub">Ingredients guide the reminder. Cooking time, cooling and refrigeration still determine whether an estimate is possible.</div>
+  <button class="btn" data-a="useDishDetails">Use dish details</button>
+  <button class="btn soft" data-a="cookGo" data-v="sample">Start from a sample dish</button>`;
+}
+function cookedSampleHTML(){
+  return `<button class="pill" data-a="cookGo" data-v="dish">← Back</button>
+  <h2 style="margin-top:12px">Choose your dish</h2><div class="sub">Sample dishes with cooked-leftover guidance.</div>
+  ${DISHES.map(x=>`<button class="btn" data-a="pickSample" data-v="${esc(x)}">${esc(x)}</button>`).join('')}`;
+}
+function cookedIngredientsHTML(){
+  const sel=cookDraft.ingredients||[];
+  return `<button class="pill" data-a="cookGo" data-v="dish">← Back</button>
+  <h2 style="margin-top:12px">Add ingredients</h2><div class="sub">Select ingredients, or add your own.</div>
+  <div class="card"><label style="margin-top:0">In your dish</label>${sel.length?esc(sel.join(' · ')):'No ingredients selected'}</div>
+  <button class="btn soft" data-a="addCustomIng">+ Add another ingredient</button>
+  ${PRESET_ING.map(i=>`<button class="btn soft" data-a="toggleIng" data-v="${esc(i)}">${sel.includes(i)?'✓ ':'+ '}${esc(i)}</button>`).join('')}
+  <button class="btn" data-a="cookGo" data-v="dish">Done</button>`;
+}
+function cookedConditionHTML(){
+  return `<button class="pill" data-a="cookGo" data-v="dish">← Back</button>
+  <h2 style="margin-top:12px">Check ingredients</h2><div class="sub">Choose the statement that matches this batch.</div>
+  ${COND_OPTS.map(c=>`<button class="btn ${cookDraft.ingredientCond===c?'':'soft'}" data-a="setCond" data-v="${esc(c)}">${esc(c)}</button>`).join('')}
+  <div class="sub" style="margin-top:10px">Cooking or reheating does not make spoiled ingredients safe, or restart the age of older leftovers.</div>`;
+}
+function cookedFormHTML(){
+  const d=cookDraft;
+  return `<button class="pill" data-a="cookGo" data-v="dish">← Back</button>
+  <h2 style="margin-top:12px">Cooked food</h2><div class="sub">Add your dish, ingredients and storage history.</div>
+  <label>Dish</label><div class="card" data-a="cookGo" data-v="dish" style="cursor:pointer">${esc(d.dishName||'')}</div>
+  <label>Ingredients</label><div class="card" data-a="cookGo" data-v="ingredients" style="cursor:pointer">${d.ingredients&&d.ingredients.length?esc(d.ingredients.join(' · ')):'None added'}</div>
+  <label>Ingredient condition</label><div class="card" data-a="cookGo" data-v="condition" style="cursor:pointer">${esc(d.ingredientCond||'Not set')}</div>
   <label>Cooked on</label><input id="c_on" type="datetime-local">
   <label>Refrigerated after cooking</label><select id="c_cool"><option>Within 1 hour</option><option>Between 1 and 2 hours</option><option>More than 2 hours</option><option>Unknown</option></select>
-  <label>Storage conditions</label><select id="c_store"><option>Fridge · 4°C or below</option><option>Temperature unknown</option><option>Freezer</option><option>Room temperature · Shelf</option></select>
-  <label>Interruptions</label><select id="c_int"><option>Continuous refrigeration</option><option>Brownout affected this batch</option><option>Other interruption / unknown</option></select>
+  <label>Room temperature</label><select id="c_room"><option>32°C or below</option><option>Above 32°C</option><option>Unknown</option></select>
+  <label>Storage</label><select id="c_store"><option>Fridge · 4°C or below</option><option>Temperature unknown</option><option>Freezer</option><option>Room temperature · Shelf</option></select>
   <div class="err" id="c_err"></div>
   <button class="btn" data-a="calcCooked">Calculate use-by estimate</button>`;
+}
+function cookedEstimateHTML(){
+  const d=cookDraft;
+  return `<button class="pill" data-a="cookGo" data-v="form">← Back</button>
+  <h2 style="margin-top:12px">Use-by estimate</h2><div class="sub">An estimate depends on the storage history.</div>
+  <label>Dish</label><input disabled value="${esc(d.dishName)}">
+  <label>Cooked on</label><input disabled value="${fmtdt(d.cookedOn)}">
+  <div class="warnbox"><b>ESTIMATED USE-BY · NOT A SAFETY GUARANTEE</b>${fmtdt(d.useBy)}</div>
+  <div class="note">For this dish, FreshTrack uses a conservative ${d.days}-day reminder from cooking based on the ingredients and storage conditions you gave.</div>
+  <button class="btn" data-a="saveCooked">Save batch</button>`;
 }
 function calcUseBy(){
   const on=$('#c_on').value;if(!on){$('#c_err').textContent='Pick when it was cooked.';return}
   const cooked=new Date(on).getTime();
-  const cool=$('#c_cool').value,store=$('#c_store').value,intr=$('#c_int').value;
+  const cool=$('#c_cool').value,room=$('#c_room').value,store=$('#c_store').value;
   let days=3;
-  if(cool!=='Within 1 hour'||store!=='Fridge · 4°C or below'||intr!=='Continuous refrigeration')days=1;
+  if(cool!=='Within 1 hour'||store!=='Fridge · 4°C or below'||room==='Above 32°C'||cookDraft.ingredientCond!=='Fresh ingredients; dish fully cooked')days=1;
   const useBy=cooked+days*DAY;
-  cookDraft={dish:$('#c_dish').value,cookedOn:cooked,cool,store,intr,useBy,days};
-  $('#main').innerHTML=`<button class="pill" data-a="tab" data-v="cooked">← Back</button>
-  <h2 style="margin-top:12px">Use-by estimate</h2><div class="sub">An estimate depends on the storage history.</div>
-  <label>Dish</label><input disabled value="${cookDraft.dish}">
-  <label>Cooked on</label><input disabled value="${fmtdt(cooked)}">
-  <div class="warnbox"><b>ESTIMATED USE-BY · NOT A SAFETY GUARANTEE</b>${fmtdt(useBy)}</div>
-  <div class="note">For these sample dishes, FreshTrack uses a conservative ${days}-day reminder from cooking based on the storage conditions you gave.</div>
-  <button class="btn" data-a="saveCooked">Save batch</button>`;
+  cookDraft.cookedOn=cooked;cookDraft.cool=cool;cookDraft.roomTemp=room;cookDraft.storage=store;cookDraft.useBy=useBy;cookDraft.days=days;
+  cookStep='estimate';render();
 }
+let scanState='idle',scanErr='';
 function scanHTML(){
+  if(scanState==='idle'){
+    return `<h2>Scan an item</h2><div class="sub">Use your phone's rear camera to read a code.</div>
+    <div data-a="openCamera" style="cursor:pointer;position:relative;background:var(--greenDk);border-radius:16px;overflow:hidden;height:38vh;max-height:280px;min-height:190px;margin-bottom:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff">
+      <div style="width:120px;height:120px;border:3px solid var(--lime);border-radius:14px;position:relative;margin-bottom:10px">
+        <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:20px">▯▮▯▮</div>
+      </div>
+      <div style="font-weight:700;position:absolute;bottom:36px;left:16px;font-size:14px">Barcode / QR</div>
+      <div style="position:absolute;bottom:14px;left:16px;font-size:10px;opacity:.75;letter-spacing:.03em">TAP TO OPEN THE BACK CAMERA</div>
+    </div>
+    ${scanErr?`<div class="err">${esc(scanErr)}</div>`:''}
+    <div class="sub">Allow camera access, scan the code, then confirm the item details.</div>
+    <button class="btn" data-a="openCamera">Open back camera</button>
+    <button class="btn soft" data-a="tab" data-v="add">Enter item manually</button>
+    <button class="btn soft" data-a="tab" data-v="cooked">Add cooked food / leftovers</button>`;
+  }
   return `<h2>Point. Scan. Track.</h2><div class="sub">Align a QR code inside the frame.</div>
-  <div style="position:relative;background:#0f2a1c;border-radius:16px;overflow:hidden;aspect-ratio:3/4;margin-bottom:12px">
+  <div style="position:relative;background:#0f2a1c;border-radius:16px;overflow:hidden;height:38vh;max-height:280px;min-height:190px;margin-bottom:10px">
     <video id="scanVideo" playsinline muted style="width:100%;height:100%;object-fit:cover;display:block"></video>
     <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none">
-      <div style="width:65%;aspect-ratio:1;border:3px solid var(--lime);border-radius:16px"></div>
+      <div style="width:150px;height:150px;border:3px solid var(--lime);border-radius:14px"></div>
     </div>
   </div>
   <div class="err" id="scanMsg"></div>
@@ -214,14 +278,15 @@ function scanHTML(){
 const scanCanvasEl=document.createElement('canvas');
 let camStream=null,scanning=false,scanRAF=null;
 async function startScan(){
-  const msg=$('#scanMsg');
+  scanErr='';
   try{
     camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
     const v=$('#scanVideo');if(!v)return;
     v.srcObject=camStream;await v.play();
     scanning=true;scanLoop();
   }catch(e){
-    if(msg)msg.textContent='Camera access was denied or is unavailable on this browser. Use "Enter item manually" below instead.';
+    scanErr='Camera access was denied or is unavailable on this browser. Try "Enter item manually" below.';
+    scanState='idle';render();
   }
 }
 function stopScan(){
@@ -243,7 +308,7 @@ function scanLoop(){
   scanRAF=requestAnimationFrame(scanLoop);
 }
 function onScanResult(text){
-  stopScan();
+  stopScan();scanState='idle';
   addDraft={name:text.slice(0,60)};
   view='add';render();
 }
@@ -288,10 +353,11 @@ document.addEventListener('click',async e=>{
   const b=e.target.closest('[data-a]');if(!b)return;const a=b.dataset.a,id=b.dataset.id;
   if(a==='tab'){
     const newV=b.dataset.v;
-    if(view==='scan'&&newV!=='scan')stopScan();
+    if(view==='scan'&&newV!=='scan'){stopScan();scanState='idle'}
+    if(newV==='cooked'&&view!=='cooked'){cookStep='dish';cookDraft={}}
     view=newV;if(view!=='items')delId='';render();
-    if(view==='scan')startScan();
   }
+  else if(a==='openCamera'){scanState='active';render();startScan()}
   else if(a==='open'){window._openId=id;view='detail';render()}
   else if(a==='used'||a==='remove'){
     if(a==='remove'&&delId!==id){delId=id;render();return}
@@ -309,11 +375,33 @@ document.addEventListener('click',async e=>{
     await db.collection('items').doc(idn).set({name,category:$('#f_cat').value,qty:`${$('#f_qtyn').value} ${$('#f_qtyu').value}`,location:$('#f_loc').value,useBy:use,openedOn:open,type:'packaged',created:Date.now()});
     addDraft={};window._savedId=idn;view='saved';render();
   }
+  else if(a==='cookGo'){
+    const nameEl=$('#cd_name');if(nameEl)cookDraft.dishName=nameEl.value;
+    cookStep=b.dataset.v;render();
+  }
+  else if(a==='useDishDetails'){
+    const nameEl=$('#cd_name');cookDraft.dishName=(nameEl?nameEl.value:cookDraft.dishName||'').trim();
+    if(!cookDraft.dishName){alert('Enter a dish name first.');return}
+    cookStep='form';render();
+  }
+  else if(a==='pickSample'){cookDraft.dishName=b.dataset.v;cookStep='dish';render()}
+  else if(a==='toggleIng'){
+    cookDraft.ingredients=cookDraft.ingredients||[];
+    const v=b.dataset.v,i=cookDraft.ingredients.indexOf(v);
+    if(i>-1)cookDraft.ingredients.splice(i,1);else cookDraft.ingredients.push(v);
+    render();
+  }
+  else if(a==='addCustomIng'){
+    const v=prompt('Ingredient name:');
+    if(v&&v.trim()){cookDraft.ingredients=cookDraft.ingredients||[];cookDraft.ingredients.push(v.trim())}
+    render();
+  }
+  else if(a==='setCond'){cookDraft.ingredientCond=b.dataset.v;cookStep='dish';render()}
   else if(a==='calcCooked')calcUseBy();
   else if(a==='saveCooked'){
     const idn='i'+Date.now();
-    await db.collection('items').doc(idn).set({name:cookDraft.dish,category:'Cooked food',qty:'1 batch',location:'Fridge',useBy:cookDraft.useBy,openedOn:null,type:'cooked',created:Date.now()});
-    cookDraft={};window._savedId=idn;view='saved';render();
+    await db.collection('items').doc(idn).set({name:cookDraft.dishName,category:'Cooked food',qty:'1 batch',location:(cookDraft.storage||'').includes('Freezer')?'Freezer':'Fridge',useBy:cookDraft.useBy,openedOn:null,type:'cooked',ingredients:cookDraft.ingredients||[],ingredientCond:cookDraft.ingredientCond||'',created:Date.now()});
+    cookDraft={};cookStep='dish';window._savedId=idn;view='saved';render();
   }
   else if(a==='saveOutage'){
     const start=$('#o_start').value?new Date($('#o_start').value).getTime():Date.now();
