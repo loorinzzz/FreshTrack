@@ -103,6 +103,7 @@ const PICKABLE=['Food','Drinks','Other supplies'];
 function normCat(c){return c==='Food & drinks'?'Food':c}
 function catIcon(cat,size){return ic(CATS[normCat(cat)]||'package',size||20,'var(--green)')}
 const LOCS=['Fridge','Freezer','Shelf'];
+const LOC_OTHER='Other location';
 const DISHES=['Chicken adobo','Meat or vegetable soup','Egg casserole'];
 const DAY=86400000;
 const fmt=t=>t?new Date(t).toLocaleDateString('en-US',{day:'numeric',month:'long',year:'numeric'}):'';
@@ -180,6 +181,8 @@ function addHTML(){
   const d=addDraft,nc=normCat(d.category||'Food');
   const selCat=PICKABLE.includes(nc)?nc:'Other supplies';
   const customCat=PICKABLE.includes(nc)||nc==='Other supplies'?'':nc;
+  const selLoc=!d.location||LOCS.includes(d.location)?(d.location||'Fridge'):LOC_OTHER;
+  const customLoc=LOCS.includes(d.location)||!d.location||d.location===LOC_OTHER?'':d.location;
   return `<button class="pill" data-a="tab" data-v="home">← Back</button>
   <h2 style="margin-top:12px">Add item</h2><div class="sub">Enter the item's details, or track cooked food instead.</div>
   <label>Item name</label><input id="f_name" value="${esc(d.name||'')}" placeholder="e.g. Fresh milk">
@@ -187,7 +190,8 @@ function addHTML(){
   <div id="f_catwrap" style="display:${selCat==='Other supplies'?'block':'none'}"><label>Your category</label><input id="f_catcustom" value="${esc(customCat)}" placeholder="e.g. Pet food, Batteries"></div>
   <div class="row"><div style="flex:1"><label>Quantity</label><input id="f_qtyn" type="number" min="1" value="${d.qtyn||1}"></div>
   <div style="flex:1"><label>Unit</label><input id="f_qtyu" value="${esc(d.qtyu||'bottle')}"></div></div>
-  <label>Storage location</label><select id="f_loc">${LOCS.map(l=>`<option ${d.location===l?'selected':''}>${l}</option>`).join('')}</select>
+  <label>Storage location</label><select id="f_loc">${LOCS.concat(LOC_OTHER).map(l=>`<option ${selLoc===l?'selected':''}>${l}</option>`).join('')}</select>
+  <div id="f_locwrap" style="display:${selLoc===LOC_OTHER?'block':'none'}"><label>Your storage location</label><input id="f_loccustom" value="${esc(customLoc)}" placeholder="e.g. Pantry, Cooler box, Desk drawer"></div>
   <label>Package use-by date</label><input id="f_use" type="date">
   <label>Opened on (leave blank if unopened)</label><input id="f_open" type="date">
   <div class="err" id="f_err"></div>
@@ -385,7 +389,9 @@ document.addEventListener('click',async e=>{
     const idn='i'+Date.now();
     const catSel=$('#f_cat').value,catCustom=($('#f_catcustom')?$('#f_catcustom').value:'').trim();
     const category=catSel==='Other supplies'&&catCustom?catCustom:catSel;
-    await db.collection('items').doc(idn).set({name,category,qty:`${$('#f_qtyn').value} ${$('#f_qtyu').value}`,location:$('#f_loc').value,useBy:use,openedOn:open,type:'packaged',created:Date.now()});
+    const locSel=$('#f_loc').value,locCustom=($('#f_loccustom')?$('#f_loccustom').value:'').trim();
+    const location=locSel===LOC_OTHER?(locCustom||'Other location'):locSel;
+    await db.collection('items').doc(idn).set({name,category,qty:`${$('#f_qtyn').value} ${$('#f_qtyu').value}`,location,useBy:use,openedOn:open,type:'packaged',created:Date.now()});
     addDraft={};window._savedId=idn;view='saved';render();
   }
   else if(a==='cookGo'){
@@ -419,7 +425,10 @@ document.addEventListener('click',async e=>{
   else if(a==='pickday'){selDate=Number(b.dataset.d);render()}
   else if(a==='mo'){calM+=Number(b.dataset.d);if(calM<0){calM=11;calY--}if(calM>11){calM=0;calY++}selDate=null;render()}
 });
-document.addEventListener('change',e=>{if(e.target.id==='f_cat'){const w=$('#f_catwrap');if(w)w.style.display=e.target.value==='Other supplies'?'block':'none'}});
+document.addEventListener('change',e=>{
+  if(e.target.id==='f_cat'){const w=$('#f_catwrap');if(w)w.style.display=e.target.value==='Other supplies'?'block':'none'}
+  if(e.target.id==='f_loc'){const w=$('#f_locwrap');if(w)w.style.display=e.target.value===LOC_OTHER?'block':'none'}
+});
 document.addEventListener('input',e=>{if(e.target.id==='q'){window._q=e.target.value;render();setTimeout(()=>{const el=$('#q');if(el){el.focus();el.selectionStart=el.selectionEnd=el.value.length}},0)}});
 init();
 </script></body></html>
