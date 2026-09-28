@@ -89,9 +89,8 @@ const ICON_PATHS={
   bell:'<path d="M6 10a6 6 0 0 1 12 0c0 4 1.5 5.5 2 6H4c.5-.5 2-2 2-6Z"/><path d="M10 19a2 2 0 0 0 4 0"/>',
   fridge:'<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M5 11h14"/><path d="M8 5v3"/><path d="M8 14v3"/>',
   bowl:'<path d="M4 12a8 4 0 0 0 16 0"/><path d="M4 12h16"/><path d="M9 5.5 10.5 7.5"/><path d="M15 5.5 13.5 7.5"/><path d="M12 4.5v3"/>',
-  health:'<circle cx="12" cy="12" r="8"/><path d="M12 9v6"/><path d="M9 12h6"/>',
-  droplet:'<path d="M12 3c4 5 6 8 6 11a6 6 0 0 1-12 0c0-3 2-6 6-11Z"/>',
-  spray:'<path d="M10 3h3"/><path d="M11 3v3l-1.5 2.5h5L13 6V3"/><path d="M8 8.5h7l1 3H7l1-3Z"/><rect x="7" y="11.5" width="10" height="9.5" rx="2"/>',
+  food:'<path d="M7 3v7a2 2 0 0 0 2 2v9"/><path d="M11 3v7a2 2 0 0 1-2 2"/><path d="M9 3v5"/><path d="M17 3c-2 1.5-3 4-3 7 0 1.5 1 2 3 2v9"/>',
+  drink:'<path d="M6 4h12l-1.5 16a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1L6 4Z"/><path d="M6.5 9h11"/>',
   package:'<path d="M3 8 12 4l9 4-9 4-9-4Z"/><path d="M3 8v9l9 4 9-4V8"/><path d="M12 12v9"/>',
   check:'<circle cx="12" cy="12" r="9"/><path d="M8 12.5 11 15.5 16 9"/>'
 };
@@ -99,14 +98,16 @@ function ic(name,size,color){
   const s=size||18,c=color||'currentColor';
   return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0">${ICON_PATHS[name]||ICON_PATHS.package}</svg>`;
 }
-const CATS={'Food & drinks':'fridge','Cooked food':'bowl','Health & first aid':'health','Personal care':'droplet','Cleaning supplies':'spray','Other supplies':'package'};
-function catIcon(cat,size){return ic(CATS[cat]||'package',size||20,'var(--green)')}
-const LOCS=['Fridge','Freezer','Shelf','Medicine cabinet','Bathroom cabinet','Utility cupboard'];
+const CATS={'Food':'food','Drinks':'drink','Cooked food':'bowl','Other supplies':'package'};
+const PICKABLE=['Food','Drinks','Other supplies'];
+function normCat(c){return c==='Food & drinks'?'Food':c}
+function catIcon(cat,size){return ic(CATS[normCat(cat)]||'package',size||20,'var(--green)')}
+const LOCS=['Fridge','Freezer','Shelf'];
 const DISHES=['Chicken adobo','Meat or vegetable soup','Egg casserole'];
 const DAY=86400000;
 const fmt=t=>t?new Date(t).toLocaleDateString('en-US',{day:'numeric',month:'long',year:'numeric'}):'';
 const fmtdt=t=>t?new Date(t).toLocaleString('en-US',{day:'numeric',month:'short',hour:'numeric',minute:'2-digit'}):'';
-let db,items=[],outages=[],ready=0,view='home',selDate=null,calY,calM,delId='',flagIds=new Set();
+let db,items=[],ready=0,view='home',selDate=null,calY,calM,delId='',flagIds=new Set();
 let addStep='pick',addDraft={},cookDraft={},outDraft={},cookStep='dish';
 function todayLocal(){const d=new Date();d.setHours(0,0,0,0);return d.getTime()}
 async function init(){
@@ -115,7 +116,6 @@ async function init(){
   if(!db){$('#main').innerHTML='<div class="card err">Firebase is not set up yet. Paste your firebaseConfig at the top of the script.</div>';return}
   const d=new Date();calY=d.getFullYear();calM=d.getMonth();
   db.collection('items').onSnapshot(s=>{items=s.docs.map(x=>({id:x.id,...x.data()})).sort((a,b)=>(a.useBy||0)-(b.useBy||0));ready|=1;render()});
-  db.collection('outages').onSnapshot(s=>{outages=s.docs.map(x=>({id:x.id,...x.data()})).sort((a,b)=>b.start-a.start);ready|=2;render()});
 }
 
 function tabs(){
@@ -133,7 +133,6 @@ function render(){
   else if(view==='cooked')$('#main').innerHTML=cookedHTML();
   else if(view==='calendar')$('#main').innerHTML=calendarHTML();
   else if(view==='alerts')$('#main').innerHTML=alertsHTML();
-  else if(view==='brownout')$('#main').innerHTML=brownoutHTML();
   else if(view==='saved')$('#main').innerHTML=savedHTML();
 }
 function homeHTML(){
@@ -144,7 +143,6 @@ function homeHTML(){
     <div class="row"><button class="tile lime" data-a="tab" data-v="calendar"><span class="ico-row">${ic('calendar',15)}Expiry calendar</span></button><button class="tile white" data-a="tab" data-v="items"><span class="ico-row">${ic('fridge',15)}Storage filters</span></button></div></div>
   <div class="row" style="align-items:center;margin-bottom:8px"><h3 style="flex:1;margin:0">Coming up</h3><a data-a="tab" data-v="alerts" style="color:var(--green);font-size:13px;font-weight:600;cursor:pointer">View alerts →</a></div>
   ${up.length?up.map(i=>itemRow(i)).join(''):'<div class="card sub">No items tracked yet.</div>'}
-  <button class="btn soft" data-a="tab" data-v="brownout">Brownout Mode · Log an outage</button>
   <button class="btn" data-a="tab" data-v="add">+ Add item</button>`;
 }
 function itemRow(i){
@@ -179,11 +177,14 @@ function detailHTML(){
   <button class="btn ${delId===i.id?'warn':''}" style="background:none;color:#c0392b;font-weight:600" data-a="remove" data-id="${i.id}">${delId===i.id?'Tap again to confirm removal':'Remove item'}</button>`;
 }
 function addHTML(){
-  const d=addDraft;
+  const d=addDraft,nc=normCat(d.category||'Food');
+  const selCat=PICKABLE.includes(nc)?nc:'Other supplies';
+  const customCat=PICKABLE.includes(nc)||nc==='Other supplies'?'':nc;
   return `<button class="pill" data-a="tab" data-v="home">← Back</button>
   <h2 style="margin-top:12px">Add item</h2><div class="sub">Enter the item's details, or track cooked food instead.</div>
   <label>Item name</label><input id="f_name" value="${esc(d.name||'')}" placeholder="e.g. Fresh milk">
-  <label>Category</label><select id="f_cat">${Object.keys(CATS).filter(c=>c!=='Cooked food').map(c=>`<option ${d.category===c?'selected':''}>${c}</option>`).join('')}</select>
+  <label>Category</label><select id="f_cat">${PICKABLE.map(c=>`<option ${selCat===c?'selected':''}>${c}</option>`).join('')}</select>
+  <div id="f_catwrap" style="display:${selCat==='Other supplies'?'block':'none'}"><label>Your category</label><input id="f_catcustom" value="${esc(customCat)}" placeholder="e.g. Pet food, Batteries"></div>
   <div class="row"><div style="flex:1"><label>Quantity</label><input id="f_qtyn" type="number" min="1" value="${d.qtyn||1}"></div>
   <div style="flex:1"><label>Unit</label><input id="f_qtyu" value="${esc(d.qtyu||'bottle')}"></div></div>
   <label>Storage location</label><select id="f_loc">${LOCS.map(l=>`<option ${d.location===l?'selected':''}>${l}</option>`).join('')}</select>
@@ -336,8 +337,7 @@ function onScanResult(text){
 function alertsHTML(){
   return `<h2>Expiry reminders</h2><div class="sub">Your nearest dates, in one view.</div>
   <div class="note">Daily reminders are on · 8:00 AM · 1 day before the saved date</div>
-  ${items.length?items.slice(0,8).map(itemRow).join(''):'<div class="card sub">Nothing tracked yet.</div>'}
-  ${outages.length?'<div class="warnbox"><b>Brownout? Open outage assessment</b>Follow the printed expiry and any after-opening instructions.</div>':''}`;
+  ${items.length?items.slice(0,8).map(itemRow).join(''):'<div class="card sub">Nothing tracked yet.</div>'}`;
 }
 function calendarHTML(){
   const first=new Date(calY,calM,1),startDow=(first.getDay()+6)%7,days=new Date(calY,calM+1,0).getDate();
@@ -352,16 +352,6 @@ function calendarHTML(){
   <div class="cal">${['M','T','W','T','F','S','S'].map(d=>`<div class="dow">${d}</div>`).join('')}${cells}</div>
   <div class="note" style="margin-top:16px">● Saved expiry / estimated use-by</div>
   ${sel?`<h3>${fmt(sel)}</h3>${onDay.length?onDay.map(itemRow).join(''):'<div class="sub">Nothing due this day.</div>'}`:''}`;
-}
-function brownoutHTML(){
-  return `<button class="pill" data-a="tab" data-v="home">← Back</button>
-  <h2 style="margin-top:12px">Brownout Mode</h2><div class="sub">Log lost cooling and review affected items.</div>
-  <label>Outage start</label><input id="o_start" type="datetime-local">
-  <label>Affected location</label><select id="o_loc"><option>Fridge</option><option>Freezer</option><option>Room / cabinets</option></select>
-  <label>Door during outage</label><select id="o_door"><option>Kept closed</option><option>Opened during outage</option><option>Unknown</option></select>
-  <label>Backup cooling</label><select id="o_bak"><option>No backup cooling</option><option>Ice / cooler used</option><option>Backup power used</option><option>I don't know</option></select>
-  <div class="warnbox"><b>An outage is not a new expiry date.</b>Cooling again does not undo exposure — review each item before deciding whether to keep it.</div>
-  <button class="btn" data-a="saveOutage">Start outage log</button>`;
 }
 function savedHTML(){
   const i=items.find(x=>x.id===window._savedId);
@@ -393,7 +383,9 @@ document.addEventListener('click',async e=>{
     const use=$('#f_use').value?new Date($('#f_use').value).getTime():todayLocal()+7*DAY;
     const open=$('#f_open').value?new Date($('#f_open').value).getTime():null;
     const idn='i'+Date.now();
-    await db.collection('items').doc(idn).set({name,category:$('#f_cat').value,qty:`${$('#f_qtyn').value} ${$('#f_qtyu').value}`,location:$('#f_loc').value,useBy:use,openedOn:open,type:'packaged',created:Date.now()});
+    const catSel=$('#f_cat').value,catCustom=($('#f_catcustom')?$('#f_catcustom').value:'').trim();
+    const category=catSel==='Other supplies'&&catCustom?catCustom:catSel;
+    await db.collection('items').doc(idn).set({name,category,qty:`${$('#f_qtyn').value} ${$('#f_qtyu').value}`,location:$('#f_loc').value,useBy:use,openedOn:open,type:'packaged',created:Date.now()});
     addDraft={};window._savedId=idn;view='saved';render();
   }
   else if(a==='cookGo'){
@@ -424,15 +416,10 @@ document.addEventListener('click',async e=>{
     await db.collection('items').doc(idn).set({name:cookDraft.dishName,category:'Cooked food',qty:'1 batch',location:(cookDraft.storage||'').includes('Freezer')?'Freezer':'Fridge',useBy:cookDraft.useBy,openedOn:null,type:'cooked',ingredients:cookDraft.ingredients||[],ingredientCond:cookDraft.ingredientCond||'',created:Date.now()});
     cookDraft={};cookStep='dish';window._savedId=idn;view='saved';render();
   }
-  else if(a==='saveOutage'){
-    const start=$('#o_start').value?new Date($('#o_start').value).getTime():Date.now();
-    const idn='o'+Date.now();
-    await db.collection('outages').doc(idn).set({start,location:$('#o_loc').value,door:$('#o_door').value,backup:$('#o_bak').value});
-    view='alerts';render();
-  }
   else if(a==='pickday'){selDate=Number(b.dataset.d);render()}
   else if(a==='mo'){calM+=Number(b.dataset.d);if(calM<0){calM=11;calY--}if(calM>11){calM=0;calY++}selDate=null;render()}
 });
+document.addEventListener('change',e=>{if(e.target.id==='f_cat'){const w=$('#f_catwrap');if(w)w.style.display=e.target.value==='Other supplies'?'block':'none'}});
 document.addEventListener('input',e=>{if(e.target.id==='q'){window._q=e.target.value;render();setTimeout(()=>{const el=$('#q');if(el){el.focus();el.selectionStart=el.selectionEnd=el.value.length}},0)}});
 init();
 </script></body></html>
