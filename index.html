@@ -110,6 +110,7 @@ const fmt=t=>t?new Date(t).toLocaleDateString('en-US',{day:'numeric',month:'long
 const fmtdt=t=>t?new Date(t).toLocaleString('en-US',{day:'numeric',month:'short',hour:'numeric',minute:'2-digit'}):'';
 let db,items=[],ready=0,view='home',selDate=null,calY,calM,delId='',flagIds=new Set();
 let addStep='pick',addDraft={},cookDraft={},outDraft={},cookStep='dish';
+function isoDate(t){if(!t)return '';const d=new Date(t),p=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`}
 function todayLocal(){const d=new Date();d.setHours(0,0,0,0);return d.getTime()}
 async function init(){
   try{const app=initializeApp(FIREBASE_CONFIG),fs=getFirestore(app);
@@ -183,20 +184,21 @@ function addHTML(){
   const customCat=PICKABLE.includes(nc)||nc==='Other supplies'?'':nc;
   const selLoc=!d.location||LOCS.includes(d.location)?(d.location||'Fridge'):LOC_OTHER;
   const customLoc=LOCS.includes(d.location)||!d.location||d.location===LOC_OTHER?'':d.location;
-  return `<button class="pill" data-a="tab" data-v="home">← Back</button>
-  <h2 style="margin-top:12px">Add item</h2><div class="sub">Enter the item's details, or track cooked food instead.</div>
+  const ed=!!d.editId,isCooked=d.type==='cooked';
+  return `<button class="pill" ${ed?`data-a="open" data-id="${d.editId}"`:'data-a="tab" data-v="home"'}>← Back</button>
+  <h2 style="margin-top:12px">${ed?'Edit item':'Add item'}</h2><div class="sub">${ed?'Change the details, then save. This updates the same item.':"Enter the item's details, or track cooked food instead."}</div>
   <label>Item name</label><input id="f_name" value="${esc(d.name||'')}" placeholder="e.g. Fresh milk">
-  <label>Category</label><select id="f_cat">${PICKABLE.map(c=>`<option ${selCat===c?'selected':''}>${c}</option>`).join('')}</select>
-  <div id="f_catwrap" style="display:${selCat==='Other supplies'?'block':'none'}"><label>Your category</label><input id="f_catcustom" value="${esc(customCat)}" placeholder="e.g. Pet food, Batteries"></div>
+  <div style="display:${isCooked?'none':'block'}"><label>Category</label><select id="f_cat">${PICKABLE.map(c=>`<option ${selCat===c?'selected':''}>${c}</option>`).join('')}</select>
+  <div id="f_catwrap" style="display:${selCat==='Other supplies'?'block':'none'}"><label>Your category</label><input id="f_catcustom" value="${esc(customCat)}" placeholder="e.g. Pet food, Batteries"></div></div>
   <div class="row"><div style="flex:1"><label>Quantity</label><input id="f_qtyn" type="number" min="1" value="${d.qtyn||1}"></div>
-  <div style="flex:1"><label>Unit</label><input id="f_qtyu" value="${esc(d.qtyu||'bottle')}"></div></div>
+  <div style="flex:1"><label>Unit</label><input id="f_qtyu" value="${esc(d.qtyu!==undefined?d.qtyu:'bottle')}"></div></div>
   <label>Storage location</label><select id="f_loc">${LOCS.concat(LOC_OTHER).map(l=>`<option ${selLoc===l?'selected':''}>${l}</option>`).join('')}</select>
   <div id="f_locwrap" style="display:${selLoc===LOC_OTHER?'block':'none'}"><label>Your storage location</label><input id="f_loccustom" value="${esc(customLoc)}" placeholder="e.g. Pantry, Cooler box, Desk drawer"></div>
-  <label>Package use-by date</label><input id="f_use" type="date">
-  <label>Opened on (leave blank if unopened)</label><input id="f_open" type="date">
+  <label>Package use-by date</label><input id="f_use" type="date" value="${isoDate(d.useBy)}">
+  <label>Opened on (leave blank if unopened)</label><input id="f_open" type="date" value="${isoDate(d.openedOn)}">
   <div class="err" id="f_err"></div>
-  <button class="btn" data-a="saveItem">Save to my household</button>
-  <button class="btn soft" data-a="tab" data-v="cooked">Add cooked food / leftovers instead</button>`;
+  <button class="btn" data-a="saveItem">${ed?'Save changes':'Save to my household'}</button>
+  ${ed?'':'<button class="btn soft" data-a="tab" data-v="cooked">Add cooked food / leftovers instead</button>'}`;
 }
 const PRESET_ING=['Chicken','Pork / beef','Fish / seafood','Eggs','Milk / cream','Vegetables','Rice'];
 const COND_OPTS=['Fresh ingredients; dish fully cooked','Contains previously cooked leftovers','Not sure / an ingredient was spoiled'];
@@ -368,6 +370,7 @@ document.addEventListener('click',async e=>{
   const b=e.target.closest('[data-a]');if(!b)return;const a=b.dataset.a,id=b.dataset.id;
   if(a==='tab'){
     const newV=b.dataset.v;
+    addDraft={};
     if(view==='scan'&&newV!=='scan'){stopScan();scanState='idle'}
     if(newV==='cooked'&&view!=='cooked'){cookStep='dish';cookDraft={}}
     view=newV;if(view!=='items')delId='';render();
@@ -379,19 +382,25 @@ document.addEventListener('click',async e=>{
     try{await db.collection('items').doc(id).delete()}catch(err){alert('Could not update: '+err.message)}
     delId='';view='items';render();
   }
-  else if(a==='editItem'){const i=items.find(x=>x.id===id);addDraft={name:i.name,category:i.category,qtyn:1,location:i.location};view='add';render()}
+  else if(a==='editItem'){const i=items.find(x=>x.id===id);const m=String(i.qty||'').match(/^(\d+(?:\.\d+)?)\s*(.*)$/);addDraft={editId:i.id,type:i.type,name:i.name,category:i.category,qtyn:m?m[1]:1,qtyu:m?m[2]:(i.qty||''),location:i.location,useBy:i.useBy,openedOn:i.openedOn};view='add';render()}
   else if(a==='filter'){window._sort=window._sort;render()}
   else if(a==='sort'){window._sort=window._sort==='expiry'?'az':'expiry';render()}
   else if(a==='saveItem'){
     const name=$('#f_name').value.trim();if(!name){$('#f_err').textContent='Item name is required.';return}
     const use=$('#f_use').value?new Date($('#f_use').value).getTime():todayLocal()+7*DAY;
     const open=$('#f_open').value?new Date($('#f_open').value).getTime():null;
-    const idn='i'+Date.now();
+    const ed=addDraft.editId,wasCooked=addDraft.type==='cooked';
     const catSel=$('#f_cat').value,catCustom=($('#f_catcustom')?$('#f_catcustom').value:'').trim();
-    const category=catSel==='Other supplies'&&catCustom?catCustom:catSel;
+    const category=wasCooked?'Cooked food':(catSel==='Other supplies'&&catCustom?catCustom:catSel);
     const locSel=$('#f_loc').value,locCustom=($('#f_loccustom')?$('#f_loccustom').value:'').trim();
     const location=locSel===LOC_OTHER?(locCustom||'Other location'):locSel;
-    await db.collection('items').doc(idn).set({name,category,qty:`${$('#f_qtyn').value} ${$('#f_qtyu').value}`,location,useBy:use,openedOn:open,type:'packaged',created:Date.now()});
+    const qty=`${$('#f_qtyn').value} ${$('#f_qtyu').value}`.trim();
+    if(ed){
+      await db.collection('items').doc(ed).update({name,category,qty,location,useBy:use,openedOn:open});
+      addDraft={};window._openId=ed;view='detail';render();return;
+    }
+    const idn='i'+Date.now();
+    await db.collection('items').doc(idn).set({name,category,qty,location,useBy:use,openedOn:open,type:'packaged',created:Date.now()});
     addDraft={};window._savedId=idn;view='saved';render();
   }
   else if(a==='cookGo'){
