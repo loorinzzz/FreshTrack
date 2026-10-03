@@ -281,21 +281,21 @@ function calcUseBy(){
 let scanState='idle',scanErr='';
 function scanHTML(){
   if(scanState==='idle'){
-    return `<h2>Scan an item</h2><div class="sub">Use your phone's rear camera to read a code.</div>
+    return `<h2>Scan an item</h2><div class="sub">Use your phone's rear camera to read a product label.</div>
     <div data-a="openCamera" style="cursor:pointer;position:relative;background:var(--greenDk);border-radius:16px;overflow:hidden;height:38vh;max-height:280px;min-height:190px;margin-bottom:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff">
       <div style="width:120px;height:120px;border:3px solid var(--lime);border-radius:14px;position:relative;margin-bottom:10px">
         <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">${ic('barcode',44,'#fff')}</div>
       </div>
-      <div style="font-weight:700;position:absolute;bottom:36px;left:16px;font-size:14px">Barcode / QR</div>
+      <div style="font-weight:700;position:absolute;bottom:36px;left:16px;font-size:14px">Label scan</div>
       <div style="position:absolute;bottom:14px;left:16px;font-size:10px;opacity:.75;letter-spacing:.03em">TAP TO OPEN THE BACK CAMERA</div>
     </div>
     ${scanErr?`<div class="err">${esc(scanErr)}</div>`:''}
-    <div class="sub">Allow camera access, scan the code, then confirm the item details.</div>
+    <div class="sub">Allow camera access, scan the label, then confirm the item details.</div>
     <button class="btn" data-a="openCamera">Open back camera</button>
     <button class="btn soft" data-a="tab" data-v="add">Enter item manually</button>
     <button class="btn soft" data-a="tab" data-v="cooked">Add cooked food / leftovers</button>`;
   }
-  return `<h2>Point. Scan. Track.</h2><div class="sub">Align a QR code inside the frame.</div>
+  return `<h2>Point. Scan. Track.</h2><div class="sub">Align the product label inside the frame.</div>
   <div style="position:relative;background:#0f2a1c;border-radius:16px;overflow:hidden;height:38vh;max-height:280px;min-height:190px;margin-bottom:10px">
     <video id="scanVideo" playsinline muted style="width:100%;height:100%;object-fit:cover;display:block"></video>
     <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none">
