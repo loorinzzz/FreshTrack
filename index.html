@@ -72,6 +72,7 @@ nav.tabs .ic{display:flex}
 <nav class="tabs" id="tabs"></nav>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@6.0.1/dist/tesseract.min.js"></script>
 <script type="module">
 import {createClient} from "https://esm.sh/@supabase/supabase-js@2";
 // PASTE YOUR SUPABASE PROJECT DETAILS HERE (Supabase dashboard > Project settings > Data API)
@@ -161,6 +162,8 @@ function tabs(){
 }
 function render(){
   if(!(ready&1))return;
+  // Realtime inventory updates must not replace a live video or unfinished OCR review.
+  if(view==='scan'&&scanState!=='idle'&&($('#scanVideo')||$('#ocrText')))return;
   tabs();
   if(view==='home')$('#main').innerHTML=homeHTML();
   else if(view==='items')$('#main').innerHTML=itemsHTML();
@@ -310,71 +313,140 @@ function calcUseBy(){
   cookDraft.cookedOn=cooked;cookDraft.cool=cool;cookDraft.roomTemp=room;cookDraft.storage=store;cookDraft.useBy=useBy;cookDraft.days=days;
   cookStep='estimate';render();
 }
-let scanState='idle',scanErr='';
-function scanHTML(){
-  if(scanState==='idle'){
-    return `<h2>Scan an item</h2><div class="sub">Use your phone's rear camera to read a product label.</div>
-    <div data-a="openCamera" style="cursor:pointer;position:relative;background:var(--greenDk);border-radius:16px;overflow:hidden;height:38vh;max-height:280px;min-height:190px;margin-bottom:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff">
-      <div style="width:120px;height:120px;border:3px solid var(--lime);border-radius:14px;position:relative;margin-bottom:10px">
-        <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">${ic('barcode',44,'#fff')}</div>
-      </div>
-      <div style="font-weight:700;position:absolute;bottom:36px;left:16px;font-size:14px">Label scan</div>
-      <div style="position:absolute;bottom:14px;left:16px;font-size:10px;opacity:.75;letter-spacing:.03em">TAP TO OPEN THE BACK CAMERA</div>
-    </div>
-    ${scanErr?`<div class="err">${esc(scanErr)}</div>`:''}
-    <div class="sub">Allow camera access, scan the label, then confirm the item details.</div>
-    <button class="btn" data-a="openCamera">Open back camera</button>
-    <button class="btn soft" data-a="tab" data-v="add">Enter item manually</button>
-    <button class="btn soft" data-a="tab" data-v="cooked">Add cooked food / leftovers</button>`;
-  }
-  return `<h2>Point. Scan. Track.</h2><div class="sub">Align the product label inside the frame.</div>
-  <div style="position:relative;background:#0f2a1c;border-radius:16px;overflow:hidden;height:38vh;max-height:280px;min-height:190px;margin-bottom:10px">
-    <video id="scanVideo" playsinline muted style="width:100%;height:100%;object-fit:cover;display:block"></video>
-    <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none">
-      <div style="width:150px;height:150px;border:3px solid var(--lime);border-radius:14px"></div>
-    </div>
-  </div>
-  <div class="err" id="scanMsg"></div>
-  <button class="btn soft" data-a="tab" data-v="add">Enter item manually</button>
-  <button class="btn soft" data-a="tab" data-v="cooked">Add cooked food / leftovers</button>`;
-}
+// OCR frames stay on-device. CDN downloads are needed for the engine and English model.
+let scanState='idle',scanErr='',scanMode='ocr',scanSession=0;
+let camStream=null,scanTimer=null,ocrWorker=null,scanBusy=false;
+let scanText='',scanConfidence=0,scanDates=[];
 const scanCanvasEl=document.createElement('canvas');
-let camStream=null,scanning=false,scanRAF=null;
-async function startScan(){
-  scanErr='';
-  try{
-    camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
-    const v=$('#scanVideo');if(!v)return;
-    v.srcObject=camStream;await v.play();
-    scanning=true;scanLoop();
-  }catch(e){
-    scanErr='Camera access was denied or is unavailable on this browser. Try "Enter item manually" below.';
-    scanState='idle';render();
-  }
+function scanHTML(){
+  if(scanState==='review')return `<h2>Review scanned expiration date</h2>
+    <div class="note">Check the package before continuing. OCR can misread names and dates. Manufacturing dates are not expiry dates.</div>
+    <label for="ocrText">Recognized text (${Math.round(scanConfidence)}% confidence)</label>
+    <textarea id="ocrText" rows="6" style="width:100%;box-sizing:border-box">${esc(scanText)}</textarea>
+    <button class="btn soft" data-a="parseOCR">Find dates again</button>
+    <label for="ocrName">Item name</label><input id="ocrName" placeholder="Enter the product name">
+    <label for="ocrDate">Package expiry / use-by date</label><input id="ocrDate" type="date">
+    <div class="sub">Choose a date below or enter it manually. No date is selected automatically.</div>
+    <div>${scanDates.map(d=>`<button class="pill" data-a="ocrDate" data-v="${d.iso}">${esc(d.iso+' · '+d.context)}</button>`).join('')||'<p>No complete date detected. Enter the date printed on the package.</p>'}</div>
+    <div class="err" id="ocrError" role="alert"></div>
+    <button class="btn" data-a="useOCR">Use reviewed details</button>
+    <button class="btn soft" data-a="openCamera" data-mode="ocr">Scan again</button>
+    <button class="btn soft" data-a="tab" data-v="add">Enter manually</button>`;
+  if(scanState==='idle')return `<h2>Scan an item</h2><div class="sub">Read a printed expiration / use-by date or scan a QR code.</div>
+    ${scanErr?`<div class="err" role="alert">${esc(scanErr)}</div>`:''}
+    <button class="btn" data-a="openCamera" data-mode="ocr">Scan expiration date</button>
+    <button class="btn soft" data-a="openCamera" data-mode="qr">Scan QR code</button>
+    <div class="note">Use good lighting and hold the label steady. Camera access requires HTTPS or localhost. OCR downloads need internet on first use.</div>
+    <button class="btn soft" data-a="tab" data-v="add">Enter item manually</button>`;
+  return `<h2>${scanMode==='ocr'?'Scan expiration date':'Scan QR code'}</h2>
+    <div class="sub">Fill the camera view with the printed EXP, use-by, or best-before date. Avoid glare and hold steady.</div>
+    <video id="scanVideo" autoplay playsinline muted style="width:100%;max-height:320px;object-fit:contain;background:#102a1c;border-radius:16px"></video>
+    <p id="scanMsg" role="status" aria-live="polite">Opening camera…</p>
+    <progress id="ocrProgress" max="1" value="0" style="width:100%"></progress>
+    <div id="ocrLive" class="card" style="white-space:pre-wrap;max-height:160px;overflow:auto"></div>
+    ${scanMode==='ocr'?'<button id="reviewOCR" class="btn" data-a="reviewOCR" disabled>Review detected text</button>':''}
+    <button class="btn soft" data-a="stopCamera">Stop camera</button>
+    <button class="btn soft" data-a="tab" data-v="add">Enter item manually</button>`;
 }
+function scanStatus(text){const el=$('#scanMsg');if(el)el.textContent=text}
 function stopScan(){
-  scanning=false;
-  if(scanRAF)cancelAnimationFrame(scanRAF);
+  ++scanSession;clearTimeout(scanTimer);scanTimer=null;scanBusy=false;
   if(camStream){camStream.getTracks().forEach(t=>t.stop());camStream=null}
+  const video=$('#scanVideo');if(video)video.srcObject=null;
+  const w=ocrWorker;ocrWorker=null;if(w)Promise.resolve(w.terminate()).catch(()=>{});
 }
-function scanLoop(){
-  if(!scanning)return;
+function scanFailure(error){
+  const messages={NotAllowedError:'Camera permission was denied. Allow camera access in your browser settings.',NotFoundError:'No camera was found.',NotReadableError:'The camera is busy. Close other apps using it.',SecurityError:'Open FreshTrack using HTTPS or localhost to use the camera.'};
+  stopScan();scanState='idle';scanErr=messages[error.name]||error.message||'Scanning failed. Try again or enter the item manually.';render();
+}
+async function startScan(mode='ocr'){
+  stopScan();const token=scanSession;scanMode=mode;scanState='active';scanErr='';scanText='';scanConfidence=0;tabs();$('#main').innerHTML=scanHTML();
+  const current=()=>token===scanSession&&view==='scan';
+  try{
+    if(!window.isSecureContext||!navigator.mediaDevices?.getUserMedia)throw new Error('Camera access requires HTTPS or localhost and a supported browser.');
+    if(mode==='qr'&&!window.jsQR)throw new Error('QR reader could not load. Check your connection and reload.');
+    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}},audio:false});
+    if(!current()){stream.getTracks().forEach(t=>t.stop());return}
+    camStream=stream;
+    stream.getVideoTracks().forEach(t=>t.addEventListener('ended',()=>{if(current())scanFailure(new Error('Camera disconnected. Open the camera again.'))},{once:true}));
+    const video=$('#scanVideo');video.srcObject=stream;await video.play();if(!current())return;
+    if(mode==='ocr'){
+      scanStatus('Loading English OCR…');
+      if(!window.Tesseract)throw new Error('OCR could not load. Check your connection and reload the page.');
+      // A single worker is reused for successive frames, never concurrent recognition jobs.
+      let expired=false;let timer;
+      const pending=Tesseract.createWorker('eng',1,{logger:m=>{
+        if(!current())return;
+        scanStatus(m.status==='recognizing text'?'Reading label…':m.status);
+        const p=$('#ocrProgress');if(p)p.value=m.progress||0;
+      },errorHandler:()=>{if(current())scanFailure(new Error('OCR worker failed. Try opening the camera again.'))}});
+      pending.then(w=>{if(expired||!current())Promise.resolve(w.terminate()).catch(()=>{})},()=>{});
+      let worker;
+      try{worker=await Promise.race([pending,new Promise((_,reject)=>{timer=setTimeout(()=>{expired=true;reject(new Error('OCR download timed out. Check your connection and retry.'))},60000)})])}finally{clearTimeout(timer)}
+      if(!current())return;
+      ocrWorker=worker;await worker.setParameters({tessedit_pageseg_mode:'11',preserve_interword_spaces:'1'});
+      if(!current())return;
+    }
+    scanLoop(token);
+  }catch(error){if(current())scanFailure(error)}
+}
+async function scanLoop(token){
+  if(token!==scanSession||view!=='scan'||scanState!=='active'||scanBusy)return;
   const v=$('#scanVideo');
-  if(v&&v.readyState===v.HAVE_ENOUGH_DATA&&window.jsQR){
-    scanCanvasEl.width=v.videoWidth;scanCanvasEl.height=v.videoHeight;
-    const ctx=scanCanvasEl.getContext('2d');
-    ctx.drawImage(v,0,0,scanCanvasEl.width,scanCanvasEl.height);
-    const img=ctx.getImageData(0,0,scanCanvasEl.width,scanCanvasEl.height);
-    const code=window.jsQR(img.data,img.width,img.height);
-    if(code&&code.data){onScanResult(code.data);return}
+  if(!v||v.readyState<2||!v.videoWidth){scanTimer=setTimeout(()=>scanLoop(token),250);return}
+  scanBusy=true;
+  let deadline;
+  try{
+    // Capture the full visible frame without a mismatched crop. Cap size for mobile memory.
+    const scale=Math.min(1,1600/v.videoWidth);
+    scanCanvasEl.width=Math.round(v.videoWidth*scale);scanCanvasEl.height=Math.round(v.videoHeight*scale);
+    const ctx=scanCanvasEl.getContext('2d',{willReadFrequently:true});ctx.drawImage(v,0,0,scanCanvasEl.width,scanCanvasEl.height);
+    if(scanMode==='qr'){
+      const im=ctx.getImageData(0,0,scanCanvasEl.width,scanCanvasEl.height);
+      const code=window.jsQR(im.data,im.width,im.height);
+      if(code?.data){stopScan();scanState='idle';addDraft={name:code.data.slice(0,60)};view='add';render();return}
+      scanStatus('Looking for a QR code…');
+    }else{
+      const im=ctx.getImageData(0,0,scanCanvasEl.width,scanCanvasEl.height);
+      for(let i=0;i<im.data.length;i+=4){const gray=0.299*im.data[i]+0.587*im.data[i+1]+0.114*im.data[i+2];const c=Math.max(0,Math.min(255,(gray-128)*1.25+128));im.data[i]=im.data[i+1]=im.data[i+2]=c}
+      ctx.putImageData(im,0,0);
+      const result=await Promise.race([ocrWorker.recognize(scanCanvasEl),new Promise((_,reject)=>{deadline=setTimeout(()=>reject(new Error('Reading timed out. Try again with a clearer label.')),30000)})]);
+      if(token!==scanSession)return;
+      const text=result.data.text.trim();
+      if(text){scanText=text;scanConfidence=result.data.confidence||0;$('#ocrLive').textContent=text;$('#reviewOCR').disabled=false;scanStatus('Text detected. Review the date or hold steady for another reading.')}
+      else scanStatus('No text found. Move closer, improve lighting, or change the angle.');
+    }
+  }catch(error){if(token===scanSession)scanFailure(error)}
+  finally{clearTimeout(deadline);if(token===scanSession){scanBusy=false;scanTimer=setTimeout(()=>scanLoop(token),scanMode==='ocr'?1500:250)}}
+}
+function suggestName(text){
+  return (text.split(/\r?\n/).map(s=>s.trim()).find(s=>/[a-z]{3}/i.test(s)&&!/(exp|best before|use by|mfg|manufact|batch|lot|ingredients|nutrition)/i.test(s))||'').slice(0,60);
+}
+function extractLabelDates(text){
+  const found=[];const months=['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+  function add(y,m,d,line){
+    y=Number(y);m=Number(m);d=Number(d);if(y<100)y+=2000;
+    const date=new Date(y,m-1,d);
+    if(y<2000||y>2100||date.getFullYear()!==y||date.getMonth()!==m-1||date.getDate()!==d)return;
+    const iso=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    if(!found.some(x=>x.iso===iso&&x.context===line))found.push({iso,context:line.slice(0,70)});
   }
-  scanRAF=requestAnimationFrame(scanLoop);
+  for(const line of text.split(/\r?\n/)){
+    // Do not promote manufacturing/production dates to expiry suggestions.
+    if(/\b(mfg|mfd|manufactured|manufacturing|packed|production|prod)\b/i.test(line))continue;
+    for(const m of line.matchAll(/\b(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})\b/g))add(m[1],m[2],m[3],line);
+    for(const m of line.matchAll(/\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{4}|\d{2})\b/g)){
+      add(m[3],m[2],m[1],line);if(m[1]!==m[2])add(m[3],m[1],m[2],line); // Both interpretations require review.
+    }
+    for(const m of line.matchAll(/\b(\d{1,2})[\s./-]*([A-Za-z]{3,9})[\s,./-]*(\d{4}|\d{2})\b/g))add(m[3],months.indexOf(m[2].slice(0,3).toLowerCase())+1,m[1],line);
+    for(const m of line.matchAll(/\b([A-Za-z]{3,9})[\s./-]+(\d{1,2})[\s,./-]+(\d{4}|\d{2})\b/g))add(m[3],months.indexOf(m[1].slice(0,3).toLowerCase())+1,m[2],line);
+  }
+  return found;
 }
-function onScanResult(text){
-  stopScan();scanState='idle';
-  addDraft={name:text.slice(0,60)};
-  view='add';render();
-}
+function reviewOCR(){if(!scanText)return;stopScan();scanDates=extractLabelDates(scanText);scanState='review';$('#main').innerHTML=scanHTML()}
+window.addEventListener('pagehide',()=>{stopScan();scanState='idle'});
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&scanState==='active'){stopScan();scanState='idle';scanErr='Camera paused while the app was in the background.';render()}});
+
 function alertsHTML(){
   return `<h2>Expiry reminders</h2><div class="sub">Your nearest dates, in one view.</div>
   <div class="note">Daily reminders are on · 8:00 AM · 1 day before the saved date</div>
@@ -406,7 +478,7 @@ document.addEventListener('click',async e=>{
   if(a==='signInGoogle'){
     await supa.auth.signInWithOAuth({provider:'google',options:{redirectTo:location.href.split('#')[0].split('?')[0]}});
   }
-  else if(a==='signOut'){await supa.auth.signOut()}
+  else if(a==='signOut'){stopScan();await supa.auth.signOut()}
   else if(a==='tab'){
     const newV=b.dataset.v;
     addDraft={};
@@ -414,7 +486,16 @@ document.addEventListener('click',async e=>{
     if(newV==='cooked'&&view!=='cooked'){cookStep='dish';cookDraft={}}
     view=newV;if(view!=='items')delId='';render();
   }
-  else if(a==='openCamera'){scanState='active';render();startScan()}
+  else if(a==='openCamera'){await startScan(b.dataset.mode||'ocr')}
+  else if(a==='stopCamera'){stopScan();scanState='idle';render()}
+  else if(a==='reviewOCR'){reviewOCR()}
+  else if(a==='parseOCR'){scanText=$('#ocrText').value;scanDates=extractLabelDates(scanText);$('#main').innerHTML=scanHTML()}
+  else if(a==='ocrDate'){$('#ocrDate').value=b.dataset.v}
+  else if(a==='useOCR'){
+    const name=$('#ocrName').value.trim(),date=$('#ocrDate').value;
+    if(!name||!date){$('#ocrError').textContent='Confirm the item name and the full package date before continuing.';return}
+    stopScan();scanState='idle';addDraft={name,useBy:new Date(date+'T00:00:00').getTime(),fromOCR:true};view='add';render();
+  }
   else if(a==='open'){window._openId=id;view='detail';render()}
   else if(a==='used'||a==='remove'){
     if(a==='remove'&&delId!==id){delId=id;render();return}
@@ -426,8 +507,9 @@ document.addEventListener('click',async e=>{
   else if(a==='sort'){window._sort=window._sort==='expiry'?'az':'expiry';render()}
   else if(a==='saveItem'){
     const name=$('#f_name').value.trim();if(!name){$('#f_err').textContent='Item name is required.';return}
-    const use=$('#f_use').value?new Date($('#f_use').value).getTime():todayLocal()+7*DAY;
-    const open=$('#f_open').value?new Date($('#f_open').value).getTime():null;
+    if(addDraft.fromOCR&&!$('#f_use').value){$('#f_err').textContent='Confirm the package date before saving.';return}
+    const use=$('#f_use').value?new Date($('#f_use').value+'T00:00:00').getTime():todayLocal()+7*DAY;
+    const open=$('#f_open').value?new Date($('#f_open').value+'T00:00:00').getTime():null;
     const ed=addDraft.editId,wasCooked=addDraft.type==='cooked';
     const catSel=$('#f_cat').value,catCustom=($('#f_catcustom')?$('#f_catcustom').value:'').trim();
     const category=wasCooked?'Cooked food':(catSel==='Other supplies'&&catCustom?catCustom:catSel);
